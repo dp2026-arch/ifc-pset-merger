@@ -22,7 +22,7 @@ try:
     st.markdown(
         f"""
         <h1 style="display: flex; align-items: center; gap: 10px;">
-            F+P Architekten 
+             
             <img src="data:image/png;base64,{logo_base64}" width="90" style="border-radius: 8px;"> 
             IFC Pset Zusammenführung
         </h1>
@@ -31,7 +31,7 @@ try:
     )
 except FileNotFoundError:
     # Fallback: Wenn das Bild nicht im Ordner liegt, zeigen wir das Standard-Emoji
-    st.title("🏗️ IFC Pset Zusammenführung")
+    st.title("F+P Architekten🏗️ IFC Pset Zusammenführung")
     st.warning("⚠️ Logo-Bild ('image_1.png') wurde nicht gefunden. Bitte legen Sie es in denselben Ordner wie das Skript.")
 
 st.write("Laden Sie eine IFC-Datei hoch und definieren Sie flexibel, welche Psets zusammengeführt werden sollen.")
