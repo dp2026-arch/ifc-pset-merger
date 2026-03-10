@@ -22,7 +22,7 @@ try:
     st.markdown(
         f"""
         <h1 style="display: flex; align-items: center; gap: 10px;">
-             
+             F+P BIM
             <img src="data:image/png;base64,{logo_base64}" width="90" style="border-radius: 8px;"> 
             IFC Pset Zusammenführung
         </h1>
