@@ -22,7 +22,7 @@ try:
     st.markdown(
         f"""
         <h1 style="display: flex; align-items: center; gap: 10px;">
-            <img src="data:image/png;base64,{logo_base64}" width="90" style="border-radius: 9px;"> 
+            <img src="data:image/png;base64,{logo_base64}" width="90" style="border-radius: 10px;"> 
             IFC Pset Zusammenführung
         </h1>
         """,
