@@ -2,9 +2,38 @@ import streamlit as st
 import ifcopenshell
 import tempfile
 import os
+import base64  # <-- NEU: Wird für das Bild benötigt
 
+# --- NEU: Funktion zum Laden des Logos ---
+def get_image_as_base64(path):
+    with open(path, "rb") as f:
+        data = f.read()
+    return base64.b64encode(data).decode()
+
+# --- Seitenkonfiguration ---
 st.set_page_config(page_title="IFC Pset Merger", page_icon="🏗️")
-st.title("F+P Architekten 🏗️ IFC Pset Zusammenführung")
+
+# --- NEU: Titel mit eigenem Logo ---
+# Wir nutzen try/except, damit die App nicht abstürzt, falls das Bild mal fehlt
+try:
+    # WICHTIG: Ersetzen Sie "image_1.png" durch den exakten Namen Ihrer Bilddatei!
+    logo_base64 = get_image_as_base64("image_1.png")
+    
+    st.markdown(
+        f"""
+        <h1 style="display: flex; align-items: center; gap: 10px;">
+            F+P Architekten 
+            <img src="data:image/png;base64,{logo_base64}" width="45" style="border-radius: 8px;"> 
+            IFC Pset Zusammenführung
+        </h1>
+        """,
+        unsafe_allow_html=True
+    )
+except FileNotFoundError:
+    # Fallback: Wenn das Bild nicht im Ordner liegt, zeigen wir das Standard-Emoji
+    st.title("F+P Architekten 🏗️ IFC Pset Zusammenführung")
+    st.warning("⚠️ Logo-Bild ('image_1.png') wurde nicht gefunden. Bitte legen Sie es in denselben Ordner wie das Skript.")
+
 st.write("Laden Sie eine IFC-Datei hoch und definieren Sie flexibel, welche Psets zusammengeführt werden sollen.")
 
 # --- Einstellungs-Bereich (UI) ---
