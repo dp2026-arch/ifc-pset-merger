@@ -106,27 +106,41 @@ if uploaded_file is not None:
                         status_text.text(f"⏳ Schritt 2/3: Erstelle neue Psets ({i+1}/{total_objects})...")
 
                     if data["props"]:
-                        # Neues Pset sicher über die API anlegen
+                        # Neues Pset über die API anlegen
                         new_pset = ifcopenshell.api.run("pset.add_pset", ifc_file, product=obj, name=target_name)
                         new_pset.HasProperties = list(data["props"].values())
                         processed_objects += 1
 
                 # ==========================================
-                # SCHRITT 3: BEREINIGUNG (API-VERSION GEGEN ABSTÜRZE)
+                # SCHRITT 3: BEREINIGUNG (ABSTURZSICHER!)
                 # ==========================================
-                status_text.text("🧹 Schritt 3/3: Lösche alte Psets sicher via API...")
+                status_text.text("🧹 Schritt 3/3: Trenne alte Verknüpfungen...")
                 
+                # 1. ZUERST alle Verknüpfungen (Relationen) sammeln und löschen
+                rels_to_delete = set()
+                for pset in relevant_psets:
+                    rels = getattr(pset, "Defines", []) or getattr(pset, "PropertyDefinitionOf", [])
+                    for rel in rels:
+                        if rel.is_a("IfcRelDefinesByProperties"):
+                            rels_to_delete.add(rel)
+                
+                for rel in rels_to_delete:
+                    try:
+                        ifc_file.remove(rel)
+                    except Exception:
+                        pass
+
+                # 2. DANACH die nun freistehenden Psets löschen
                 total_deletes = len(relevant_psets)
                 deleted_psets = 0
 
                 for j, pset in enumerate(relevant_psets):
                     if total_deletes > 0 and j % max(1, (total_deletes // 20)) == 0:
                         progress_bar.progress(min(100, int((j / total_deletes) * 100)))
-                        status_text.text(f"🧹 Schritt 3/3: Lösche alte Daten ({j+1} von {total_deletes})...")
+                        status_text.text(f"🧹 Schritt 3/3: Lösche alte Psets ({j+1} von {total_deletes})...")
                     
                     try:
-                        # Die API löscht das Pset UND alle dranhängenden Relationen absolut sicher und verhindert C++ Abstürze!
-                        ifcopenshell.api.run("pset.remove_pset", ifc_file, pset=pset)
+                        ifc_file.remove(pset)
                         deleted_psets += 1
                     except Exception:
                         pass
