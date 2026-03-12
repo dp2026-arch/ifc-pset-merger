@@ -1,10 +1,9 @@
 import streamlit as st
 import ifcopenshell
-import ifcopenshell.guid
+import ifcopenshell.api  # <-- NEU: Wir nutzen jetzt die API wie in Blender!
 import tempfile
 import os
 import base64
-from collections import defaultdict
 
 # --- Funktion zum Laden des Logos ---
 def get_image_as_base64(path):
@@ -12,10 +11,8 @@ def get_image_as_base64(path):
         data = f.read()
     return base64.b64encode(data).decode()
 
-# --- Seitenkonfiguration ---
 st.set_page_config(page_title="IFC Pset Merger", page_icon="🏗️")
 
-# --- Titel mit eigenem Logo ---
 try:
     logo_base64 = get_image_as_base64("image_1.png")
     st.markdown(
@@ -24,44 +21,22 @@ try:
             <img src="data:image/png;base64,{logo_base64}" width="90" style="border-radius: 10px;"> 
             IFC Pset Zusammenführung
         </h1>
-        """,
-        unsafe_allow_html=True
+        """, unsafe_allow_html=True
     )
 except FileNotFoundError:
     st.title("F+P Architekten🏗️ IFC Pset Zusammenführung")
-    st.warning("⚠️ Logo-Bild ('image_1.png') wurde nicht gefunden.")
 
 st.write("Laden Sie eine IFC-Datei hoch und definieren Sie flexibel, welche Psets zusammengeführt werden sollen.")
 
-# --- Einstellungs-Bereich (UI) ---
 st.subheader("⚙️ Parameter einstellen")
-
 target_name = st.text_input("Name des neuen Ziel-Psets:", value="UBA_Pset_Specific")
 
 default_sources = """UBE_Pset_Specific_Beam
 UBE_Pset_Specific_BuildingElementProxy
-UBE_Pset_Specific_Column
-UBE_Pset_Specific_CoveringCeiling
-UBE_Pset_Specific_CoveringFlooring
-UBE_Pset_Specific_CoveringWall
-UBE_Pset_Specific_CurtainWall
-UBE_Pset_Specific_Door
-UBE_Pset_Specific_Furniture
-UBE_Pset_Specific_Member
-UBE_Pset_Specific_PipeSegment
-UBE_Pset_Specific_Railing
-UBE_Pset_Specific_Roof
-UBE_PSet_Specific_Schlitz und Durchbruch
-UBE_Pset_Specific_ShadingDevice
-UBE_Pset_Specific_Slab
-UBE_Pset_Specific_Space
-UBE_PSet_Specific_Stairs
-UBE_Pset_Specific_Wall
-UBE_Pset_Specific_Window
-Pset_WallCommon"""
+UBE_Pset_Specific_Wall"""
 
 sources_input = st.text_area("Zu suchende Psets (eines pro Zeile):", value=default_sources, height=250)
-sources_to_merge = [line.strip() for line in sources_input.split('\n') if line.strip()]
+sources_to_merge = set([line.strip() for line in sources_input.split('\n') if line.strip()]) # als Set für schnellere Suche
 
 st.divider()
 
@@ -89,104 +64,73 @@ if uploaded_file is not None:
                 
                 progress_bar = st.progress(0)
                 status_text = st.empty()
-                status_text.text("🔍 Analysiere IFC-Struktur (Das geht jetzt rasend schnell)...")
                 
-                # --- NEUE, HIGH-PERFORMANCE LOGIK ---
-                # 1. Wir suchen NUR die Pset-Verknüpfungen, nicht alle Bauteile
-                all_relations = ifc_file.by_type("IfcRelDefinesByProperties")
+                # ==========================================
+                # BLENDER-LOGIK STARTET HIER
+                # ==========================================
+                status_text.text("🔍 Schritt 1/3: Suche relevante Psets (Rückwärtssuche)...")
+                relevant_psets = [p for p in ifc_file.by_type("IfcPropertySet") if getattr(p, "Name", None) in sources_to_merge]
                 
-                # Dictionary: Speichert für jedes Objekt eine Liste seiner relevanten (Relation, Pset) Paare
-                objects_to_psets = defaultdict(list)
-                
-                for rel in all_relations:
-                    pset = rel.RelatingPropertyDefinition
-                    if pset and pset.is_a("IfcPropertySet") and getattr(pset, "Name", None) in sources_to_merge:
-                        for obj in rel.RelatedObjects:
-                            objects_to_psets[obj].append((rel, pset))
-                
-                objects_to_process = list(objects_to_psets.keys())
-                total_objects = len(objects_to_process)
-                
-                modified_objects_count = 0
-                removed_psets_count = 0
-                
-                if total_objects == 0:
-                    status_text.text("✅ Keine passenden Psets zum Zusammenführen gefunden.")
-                    progress_bar.progress(100)
-                else:
-                    owner_history_list = ifc_file.by_type("IfcOwnerHistory")
-                    owner_history = owner_history_list[0] if owner_history_list else None
-                    
-                    # 2. Wir iterieren NUR über die Bauteile, die wirklich betroffen sind
-                    for i, obj in enumerate(objects_to_process):
-                        if i % max(1, (total_objects // 20)) == 0:
-                            progress = min(100, int((i / total_objects) * 100))
-                            progress_bar.progress(progress)
-                            status_text.text(f"⏳ Führe Psets zusammen: Bauteil {i+1} von {total_objects}...")
+                objects_to_update = {}
 
-                        matching_psets = objects_to_psets[obj]
-                        all_properties = []
-                        existing_prop_names = set()
-                        
-                        # Eigenschaften sammeln
-                        for rel, pset in matching_psets:
-                            if getattr(pset, "HasProperties", None):
-                                for prop in pset.HasProperties:
-                                    if prop.Name not in existing_prop_names:
-                                        all_properties.append(prop)
-                                        existing_prop_names.add(prop.Name)
-                        
-                        # Neues Ziel-Pset erstellen
-                        if all_properties:
-                            new_pset = ifc_file.createIfcPropertySet(
-                                GlobalId=ifcopenshell.guid.new(),
-                                OwnerHistory=owner_history,
-                                Name=target_name,
-                                Description=None,
-                                HasProperties=all_properties
-                            )
-                            
-                            ifc_file.createIfcRelDefinesByProperties(
-                                GlobalId=ifcopenshell.guid.new(),
-                                OwnerHistory=owner_history,
-                                Name=None,
-                                Description=None,
-                                RelatedObjects=[obj],
-                                RelatingPropertyDefinition=new_pset
-                            )
-                            modified_objects_count += 1 
-                            
-                            # Alte Psets sauber auflösen
-                            for rel, pset in matching_psets:
-                                current_related = list(rel.RelatedObjects)
-                                if obj in current_related:
-                                    current_related.remove(obj)
+                # 1. DATEN SAMMELN
+                for pset in relevant_psets:
+                    rels = getattr(pset, "Defines", []) or getattr(pset, "PropertyDefinitionOf", [])
+                    for rel in rels:
+                        if rel.is_a("IfcRelDefinesByProperties"):
+                            for obj in rel.RelatedObjects:
+                                if obj not in objects_to_update:
+                                    objects_to_update[obj] = {"props": {}}
                                 
-                                if len(current_related) == 0:
-                                    try:
-                                        ifc_file.remove(rel)
-                                    except: pass
-                                    
-                                    try:
-                                        ifc_file.remove(pset)
-                                        removed_psets_count += 1 
-                                    except: pass
-                                else:
-                                    rel.RelatedObjects = current_related
+                                if getattr(pset, "HasProperties", None):
+                                    for prop in pset.HasProperties:
+                                        objects_to_update[obj]["props"][prop.Name] = prop
+                
+                total_objects = len(objects_to_update)
+                
+                # 2. NEUE PSETS ERSTELLEN
+                processed_objects = 0
+                for i, (obj, data) in enumerate(objects_to_update.items()):
+                    if i % max(1, (total_objects // 20)) == 0:
+                        progress_bar.progress(min(50 + int((i / total_objects) * 40), 90))
+                        status_text.text(f"⏳ Schritt 2/3: Erstelle neue Psets ({i+1}/{total_objects})...")
 
-                    progress_bar.progress(100)
-                    status_text.text("✅ Verarbeitung in Rekordzeit abgeschlossen!")
+                    if data["props"]:
+                        # API nutzen wie in Blender!
+                        new_pset = ifcopenshell.api.run("pset.add_pset", ifc_file, product=obj, name=target_name)
+                        new_pset.HasProperties = list(data["props"].values())
+                        processed_objects += 1
 
-                    # Datei speichern und laden
-                    ifc_file.write(temp_out_path)
-                    with open(temp_out_path, "rb") as file:
-                        st.session_state.processed_file = file.read()
-                        
-                    st.session_state.stats = {
-                        "total": total_objects,
-                        "modified": modified_objects_count,
-                        "removed": removed_psets_count
-                    }
+                # 3. BRUTE-FORCE BEREINIGUNG
+                status_text.text("🧹 Schritt 3/3: Lösche alte Psets rigoros...")
+                deleted_psets = 0
+                for pset in relevant_psets:
+                    rels = getattr(pset, "Defines", []) or getattr(pset, "PropertyDefinitionOf", [])
+                    for rel in rels:
+                        try:
+                            ifc_file.remove(rel)
+                        except Exception: pass
+                    try:
+                        ifc_file.remove(pset)
+                        deleted_psets += 1
+                    except Exception: pass
+
+                # ==========================================
+                # BLENDER-LOGIK ENDE
+                # ==========================================
+
+                progress_bar.progress(100)
+                status_text.text("✅ Verarbeitung erfolgreich abgeschlossen!")
+
+                # Datei speichern
+                ifc_file.write(temp_out_path)
+                with open(temp_out_path, "rb") as file:
+                    st.session_state.processed_file = file.read()
+                    
+                st.session_state.stats = {
+                    "total": processed_objects,
+                    "deleted": deleted_psets
+                }
 
             except Exception as e:
                 st.error(f"Es gab einen Fehler bei der Verarbeitung: {e}")
@@ -199,12 +143,11 @@ if uploaded_file is not None:
 
 # --- Download-Bereich ---
 if st.session_state.processed_file is not None and st.session_state.stats is not None:
-    st.success("Die IFC-Datei wurde erfolgreich und schnell bereinigt!")
+    st.success("Die IFC-Datei wurde erfolgreich bereinigt!")
     
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Gefundene Bauteile", f"{st.session_state.stats['total']:,}")
-    col2.metric("Angepasste Bauteile", f"{st.session_state.stats['modified']:,}")
-    col3.metric("Gelöschte Psets", f"{st.session_state.stats['removed']:,}")
+    col1, col2 = st.columns(2)
+    col1.metric("Aktualisierte Bauteile", f"{st.session_state.stats['total']:,}")
+    col2.metric("Gelöschte alte Psets", f"{st.session_state.stats['deleted']:,}")
 
     st.divider()
 
