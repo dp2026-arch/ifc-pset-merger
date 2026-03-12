@@ -15,7 +15,6 @@ def get_image_as_base64(path):
 st.set_page_config(page_title="IFC Pset Merger", page_icon="🏗️", layout="centered")
 
 try:
-    # Passe den Dateinamen an, falls dein Logo anders heißt
     logo_base64 = get_image_as_base64("image_1.png")
     st.markdown(
         f"""
@@ -34,44 +33,13 @@ st.write("Laden Sie eine IFC-Datei hoch und definieren Sie flexibel, welche Pset
 st.subheader("⚙️ Parameter einstellen")
 target_name = st.text_input("Name des neuen Ziel-Psets:", value="AWB_Specific")
 
-default_sources = """Pset_AirSideSystemInformation
-Pset_AirTerminalTypeCommon
-Pset_BeamCommon
-Pset_BuildingCommon
-Pset_BuildingElementProxyCommon
-Pset_ColumnCommon
-Pset_ConcreteElementGeneral
-Pset_CoveringCommon
-Pset_CurtainWallCommon
-Pset_DistributionFlowElementCommon
-Pset_DoorCommon
-Pset_DuctSegmentTypeCommon
-Pset_FlowSegmentDuctSegment
-Pset_FlowSegmentPipeSegment
-Pset_FurnitureTypeCommon
-Pset_ManufacturerOccurrence
-Pset_ManufacturerTypeInformation
-Pset_MemberCommon
-Pset_OpeningElementCommon
-Pset_PlateCommon
-Pset_ProductRequirements
-Pset_ProvisionForVoid
-Pset_QuantityTakeOff
-Pset_RailingCommon
-Pset_ReinforcementBarPitchOfBeam
-Pset_ReinforcementBarPitchOfColumn
-Pset_ReinforcementBarPitchOfSlab
-Pset_ReinforcementBarPitchOfWall
-Pset_RoofCommon
-Pset_SlabCommon
-Pset_SpaceCommon
-Pset_StairCommon
-Pset_StairFlightCommon
-Pset_TransportElementCommon
-Pset_WallCommon
-Pset_WindowCommon"""
+default_sources = """UBE_Pset_Specific_Slab
+UBE_Pset_Specific_Space
+UBE_Pset_Specific_Stairs
+UBE_Pset_Specific_Wall
+UBE_Pset_Specific_Window"""
 
-sources_input = st.text_area("Zu suchende Psets (eines pro Zeile):", value=default_sources, height=250)
+sources_input = st.text_area("Zu suchende Psets (eines pro Zeile):", value=default_sources, height=200)
 
 # WICHTIG: Alle Eingaben in Kleinbuchstaben umwandeln für sichere Suche
 sources_to_merge = set([line.strip().lower() for line in sources_input.split('\n') if line.strip()])
@@ -93,7 +61,6 @@ if uploaded_file is not None:
         elif not target_name.strip():
             st.error("Bitte geben Sie einen gültigen Ziel-Namen ein.")
         else:
-            # Temporäre Dateien für sicheres Handling anlegen
             with tempfile.NamedTemporaryFile(delete=False, suffix=".ifc") as tmp_in:
                 tmp_in.write(uploaded_file.getvalue())
                 temp_in_path = tmp_in.name
@@ -106,31 +73,39 @@ if uploaded_file is not None:
                 status_text = st.empty()
                 
                 # ==========================================
-                # SCHRITT 1: DATEN SAMMELN
+                # SCHRITT 1: DATEN SAMMELN (NEUE METHODE)
                 # ==========================================
                 status_text.text("🔍 Schritt 1/3: Suche relevante Psets (Rückwärtssuche)...")
                 
-                # Psets finden (Case-Insensitive durch .lower())
                 relevant_psets = [p for p in ifc_file.by_type("IfcPropertySet") if getattr(p, "Name", None) and p.Name.lower() in sources_to_merge]
                 
                 objects_to_update = {}
                 collision_count = 0
 
                 for pset in relevant_psets:
-                    rels = getattr(pset, "Defines", []) or getattr(pset, "PropertyDefinitionOf", [])
-                    for rel in rels:
-                        if rel.is_a("IfcRelDefinesByProperties"):
-                            for obj in rel.RelatedObjects:
-                                if obj not in objects_to_update:
-                                    objects_to_update[obj] = {"props": {}}
-                                
-                                if getattr(pset, "HasProperties", None):
-                                    for prop in pset.HasProperties:
-                                        # Zähler für überschriebene Eigenschaften (Namenskollisionen)
-                                        if prop.Name in objects_to_update[obj]["props"]:
-                                            collision_count += 1
-                                        
-                                        objects_to_update[obj]["props"][prop.Name] = prop
+                    # KUGELSICHERE SUCHE: Findet alle Verknüpfungen (auch in IFC4 und an Typen)
+                    inverses = ifc_file.get_inverse(pset)
+                    
+                    for inv in inverses:
+                        related_objects = []
+                        
+                        # Fall 1: Reguläre Bauteile (Occurrences)
+                        if inv.is_a("IfcRelDefinesByProperties"):
+                            related_objects = getattr(inv, "RelatedObjects", [])
+                        
+                        # Fall 2: Typen in IFC4 (die hängen direkt am Pset)
+                        elif inv.is_a("IfcTypeObject"):
+                            related_objects = [inv]
+                            
+                        for obj in related_objects:
+                            if obj not in objects_to_update:
+                                objects_to_update[obj] = {"props": {}}
+                            
+                            if getattr(pset, "HasProperties", None):
+                                for prop in pset.HasProperties:
+                                    if prop.Name in objects_to_update[obj]["props"]:
+                                        collision_count += 1
+                                    objects_to_update[obj]["props"][prop.Name] = prop
                 
                 total_objects = len(objects_to_update)
                 
@@ -144,7 +119,6 @@ if uploaded_file is not None:
                         status_text.text(f"⏳ Schritt 2/3: Erstelle neue Psets ({i+1}/{total_objects})...")
 
                     if data["props"]:
-                        # Neues Pset über die API anlegen
                         new_pset = ifcopenshell.api.run("pset.add_pset", ifc_file, product=obj, name=target_name)
                         new_pset.HasProperties = list(data["props"].values())
                         processed_objects += 1
@@ -157,29 +131,29 @@ if uploaded_file is not None:
                 deleted_psets = 0
 
                 for j, pset in enumerate(relevant_psets):
-                    # Progress Bar Update
                     if total_deletes > 0 and j % max(1, (total_deletes // 20)) == 0:
                         progress_bar.progress(min(100, int((j / total_deletes) * 100)))
                         status_text.text(f"🧹 Schritt 3/3: Lösche alte Psets ({j+1} von {total_deletes})...")
                     
-                    rels = getattr(pset, "Defines", []) or getattr(pset, "PropertyDefinitionOf", [])
+                    inverses = ifc_file.get_inverse(pset)
                     
-                    # 1. API-Bereinigung: Verknüpfungen lösen
-                    for rel in rels:
-                        if rel.is_a("IfcRelDefinesByProperties"):
-                            # list() für eine statische Kopie der Objekte
-                            for obj in list(rel.RelatedObjects):
+                    # 1. API-Bereinigung
+                    for inv in inverses:
+                        if inv.is_a("IfcRelDefinesByProperties"):
+                            for obj in list(getattr(inv, "RelatedObjects", [])):
                                 try:
                                     ifcopenshell.api.run("pset.remove_pset", ifc_file, product=obj, pset=pset)
-                                except Exception:
-                                    pass # Warnungen ignorieren, um die UI sauber zu halten
+                                except: pass
+                        elif inv.is_a("IfcTypeObject"):
+                            try:
+                                ifcopenshell.api.run("pset.remove_pset", ifc_file, product=inv, pset=pset)
+                            except: pass
                     
-                    # 2. Harte Garbage Collection (Löscht auch verwaiste Psets)
+                    # 2. Harte Garbage Collection
                     try:
                         ifc_file.remove(pset)
                         deleted_psets += 1
                     except:
-                        # Wenn remove() fehlschlägt, wurde das Pset bereits von der API gelöscht
                         deleted_psets += 1
 
                 progress_bar.progress(100)
@@ -200,7 +174,6 @@ if uploaded_file is not None:
                 st.error(f"Es gab einen Fehler bei der Verarbeitung: {e}")
 
             finally:
-                # Temporäre Dateien sicher aufräumen
                 if 'temp_in_path' in locals() and os.path.exists(temp_in_path):
                     try: os.remove(temp_in_path)
                     except: pass
@@ -212,12 +185,10 @@ if uploaded_file is not None:
 if st.session_state.processed_file is not None and st.session_state.stats is not None:
     st.success("Die IFC-Datei wurde erfolgreich bereinigt!")
     
-    # 3 Spalten für Metriken (inklusive Warnung bei Kollisionen)
     col1, col2, col3 = st.columns(3)
     col1.metric("Aktualisierte Bauteile", f"{st.session_state.stats['total']:,}")
     col2.metric("Gelöschte alte Psets", f"{st.session_state.stats['deleted']:,}")
     
-    # Rote Warnung bei Kollisionen, sonst grüne 0
     coll = st.session_state.stats['collisions']
     col3.metric("Überschriebene Werte", f"{coll:,}", delta="- Kollisionen" if coll > 0 else "Keine", delta_color="inverse")
 
