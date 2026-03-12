@@ -1,2 +1,2 @@
 streamlit
-ifcopenshell
+ifcopenshell>=0.7.0
