@@ -1,6 +1,6 @@
 import streamlit as st
 import ifcopenshell
-import ifcopenshell.guid  # <-- NEU: Wichtig für die Generierung neuer IFC-IDs
+import ifcopenshell.guid  # Wichtig für die Generierung neuer IFC-IDs
 import tempfile
 import os
 import base64
@@ -62,7 +62,7 @@ UBE_Pset_Specific_Space
 UBE_PSet_Specific_Stairs
 UBE_Pset_Specific_Wall
 UBE_Pset_Specific_Window
-Pset_WallCommon""" # <-- Pset_WallCommon direkt als Beispiel hinzugefügt
+Pset_WallCommon"""
 
 sources_input = st.text_area(
     label="Zu suchende Psets (eines pro Zeile):", 
@@ -77,7 +77,7 @@ st.divider()
 
 uploaded_file = st.file_uploader("Wählen Sie eine IFC-Datei aus", type=['ifc'])
 
-# --- NEU: Session State Initialisierung für den Streamlit-Lifecycle ---
+# --- Session State Initialisierung für den Streamlit-Lifecycle ---
 if 'processed_file' not in st.session_state:
     st.session_state.processed_file = None
 if 'stats' not in st.session_state:
@@ -109,13 +109,14 @@ if uploaded_file is not None:
                 status_text = st.empty()
                 
                 # OwnerHistory einmalig holen (wird für neue Psets benötigt)
-                owner_history = ifc_file.by_type("IfcOwnerHistory")[0] if ifc_file.by_type("IfcOwnerHistory") else None
+                owner_history_list = ifc_file.by_type("IfcOwnerHistory")
+                owner_history = owner_history_list[0] if owner_history_list else None
                 
                 # --- LOGIK ---
                 for i, obj in enumerate(all_objects):
                     
                     if total_objects > 0 and i % max(1, (total_objects // 20)) == 0:
-                        progress = int((i / total_objects) * 100)
+                        progress = min(100, int((i / total_objects) * 100))
                         progress_bar.progress(progress)
                         status_text.text(f"⏳ Verarbeite Bauteil {i} von {total_objects}...")
 
@@ -175,6 +176,7 @@ if uploaded_file is not None:
                                 if len(related_objects) == 0:
                                     ifc_file.remove(rel)
                                     
+                                    # Prüfen ob das Pset noch von anderen Relationen genutzt wird
                                     inverse_rel = getattr(pset, "Defines", None) or getattr(pset, "PropertyDefinitionOf", [])
                                     if not inverse_rel:
                                         ifc_file.remove(pset)
@@ -207,7 +209,7 @@ if uploaded_file is not None:
                 if 'temp_out_path' in locals() and os.path.exists(temp_out_path):
                     os.remove(temp_out_path)
 
-# --- NEU: Download-Bereich außerhalb der Button-Logik ---
+# --- Download-Bereich außerhalb der Button-Logik ---
 if st.session_state.processed_file is not None:
     st.success("Die IFC-Datei wurde erfolgreich bereinigt!")
     
