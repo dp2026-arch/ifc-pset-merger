@@ -11,6 +11,7 @@ def get_image_as_base64(path):
         data = f.read()
     return base64.b64encode(data).decode()
 
+# --- Seitenkonfiguration ---
 st.set_page_config(page_title="IFC Pset Merger", page_icon="🏗️")
 
 try:
@@ -28,6 +29,7 @@ except FileNotFoundError:
 
 st.write("Laden Sie eine IFC-Datei hoch und definieren Sie flexibel, welche Psets zusammengeführt werden sollen.")
 
+# --- Einstellungs-Bereich (UI) ---
 st.subheader("⚙️ Parameter einstellen")
 target_name = st.text_input("Name des neuen Ziel-Psets:", value="AWB_Specific")
 
@@ -104,33 +106,28 @@ if uploaded_file is not None:
                         status_text.text(f"⏳ Schritt 2/3: Erstelle neue Psets ({i+1}/{total_objects})...")
 
                     if data["props"]:
+                        # Neues Pset sicher über die API anlegen
                         new_pset = ifcopenshell.api.run("pset.add_pset", ifc_file, product=obj, name=target_name)
                         new_pset.HasProperties = list(data["props"].values())
                         processed_objects += 1
 
                 # ==========================================
-                # SCHRITT 3: BEREINIGUNG (Die optimierte Version)
+                # SCHRITT 3: BEREINIGUNG (API-VERSION GEGEN ABSTÜRZE)
                 # ==========================================
-                status_text.text("🧹 Schritt 3/3: Sammle zu löschende Elemente...")
+                status_text.text("🧹 Schritt 3/3: Lösche alte Psets sicher via API...")
                 
-                entities_to_delete = set()
-                for pset in relevant_psets:
-                    rels = getattr(pset, "Defines", []) or getattr(pset, "PropertyDefinitionOf", [])
-                    entities_to_delete.update(rels)
-                    entities_to_delete.add(pset)
-
-                total_deletes = len(entities_to_delete)
+                total_deletes = len(relevant_psets)
                 deleted_psets = 0
 
-                for j, entity in enumerate(entities_to_delete):
+                for j, pset in enumerate(relevant_psets):
                     if total_deletes > 0 and j % max(1, (total_deletes // 20)) == 0:
                         progress_bar.progress(min(100, int((j / total_deletes) * 100)))
                         status_text.text(f"🧹 Schritt 3/3: Lösche alte Daten ({j+1} von {total_deletes})...")
                     
                     try:
-                        ifc_file.remove(entity)
-                        if entity.is_a("IfcPropertySet"):
-                            deleted_psets += 1
+                        # Die API löscht das Pset UND alle dranhängenden Relationen absolut sicher und verhindert C++ Abstürze!
+                        ifcopenshell.api.run("pset.remove_pset", ifc_file, pset=pset)
+                        deleted_psets += 1
                     except Exception:
                         pass
 
