@@ -1,6 +1,6 @@
 import streamlit as st
 import ifcopenshell
-import ifcopenshell.api  # <-- NEU: Wir nutzen jetzt die API wie in Blender!
+import ifcopenshell.api
 import tempfile
 import os
 import base64
@@ -29,14 +29,21 @@ except FileNotFoundError:
 st.write("Laden Sie eine IFC-Datei hoch und definieren Sie flexibel, welche Psets zusammengeführt werden sollen.")
 
 st.subheader("⚙️ Parameter einstellen")
-target_name = st.text_input("Name des neuen Ziel-Psets:", value="UBA_Pset_Specific")
+target_name = st.text_input("Name des neuen Ziel-Psets:", value="AWB_Specific")
 
-default_sources = """UBE_Pset_Specific_Beam
-UBE_Pset_Specific_BuildingElementProxy
-UBE_Pset_Specific_Wall"""
+default_sources = """Pset_ReinforcementBarPitchOfSlab
+Pset_ReinforcementBarPitchOfWall
+Pset_RoofCommon
+Pset_SlabCommon
+Pset_SpaceCommon
+Pset_StairCommon
+Pset_StairFlightCommon
+Pset_TransportElementCommon
+Pset_WallCommon
+Pset_WindowCommon"""
 
 sources_input = st.text_area("Zu suchende Psets (eines pro Zeile):", value=default_sources, height=250)
-sources_to_merge = set([line.strip() for line in sources_input.split('\n') if line.strip()]) # als Set für schnellere Suche
+sources_to_merge = set([line.strip() for line in sources_input.split('\n') if line.strip()])
 
 st.divider()
 
@@ -66,14 +73,13 @@ if uploaded_file is not None:
                 status_text = st.empty()
                 
                 # ==========================================
-                # BLENDER-LOGIK STARTET HIER
+                # SCHRITT 1: DATEN SAMMELN
                 # ==========================================
                 status_text.text("🔍 Schritt 1/3: Suche relevante Psets (Rückwärtssuche)...")
                 relevant_psets = [p for p in ifc_file.by_type("IfcPropertySet") if getattr(p, "Name", None) in sources_to_merge]
                 
                 objects_to_update = {}
 
-                # 1. DATEN SAMMELN
                 for pset in relevant_psets:
                     rels = getattr(pset, "Defines", []) or getattr(pset, "PropertyDefinitionOf", [])
                     for rel in rels:
@@ -88,46 +94,45 @@ if uploaded_file is not None:
                 
                 total_objects = len(objects_to_update)
                 
-                # 2. NEUE PSETS ERSTELLEN
+                # ==========================================
+                # SCHRITT 2: NEUE PSETS ERSTELLEN
+                # ==========================================
                 processed_objects = 0
                 for i, (obj, data) in enumerate(objects_to_update.items()):
-                    if i % max(1, (total_objects // 20)) == 0:
+                    if total_objects > 0 and i % max(1, (total_objects // 20)) == 0:
                         progress_bar.progress(min(50 + int((i / total_objects) * 40), 90))
                         status_text.text(f"⏳ Schritt 2/3: Erstelle neue Psets ({i+1}/{total_objects})...")
 
                     if data["props"]:
-                        # API nutzen wie in Blender!
                         new_pset = ifcopenshell.api.run("pset.add_pset", ifc_file, product=obj, name=target_name)
                         new_pset.HasProperties = list(data["props"].values())
                         processed_objects += 1
 
-                # 3. BRUTE-FORCE BEREINIGUNG
-                status_text.text("🧹 Schritt 3/3: Lösche alte Psets rigoros...")
-                deleted_psets = set()
+                # ==========================================
+                # SCHRITT 3: BEREINIGUNG (Die optimierte Version)
+                # ==========================================
+                status_text.text("🧹 Schritt 3/3: Sammle zu löschende Elemente...")
+                
+                entities_to_delete = set()
                 for pset in relevant_psets:
                     rels = getattr(pset, "Defines", []) or getattr(pset, "PropertyDefinitionOf", [])
-                    entities_to_delete.update(rels)  # Alle Relationen auf einmal hinzufügen
-                    entities_to_delete.add(pset)  # Das Pset selbst hinzufügen
+                    entities_to_delete.update(rels)
+                    entities_to_delete.add(pset)
+
                 total_deletes = len(entities_to_delete)
                 deleted_psets = 0
 
-                # Jetzt löschen wir alles in einer sauberen, iterativen Schleife
                 for j, entity in enumerate(entities_to_delete):
-                    # UI-Update nur alle 5% (spart extrem viel Render-Zeit in Streamlit)
-                    if j % max(1, (total_deletes // 20)) == 0:
+                    if total_deletes > 0 and j % max(1, (total_deletes // 20)) == 0:
                         progress_bar.progress(min(100, int((j / total_deletes) * 100)))
-                        status_text.text(f"🧹 Schritt 3/3: Lösche alte Daten ({j + 1} von {total_deletes})...")
-
+                        status_text.text(f"🧹 Schritt 3/3: Lösche alte Daten ({j+1} von {total_deletes})...")
+                    
                     try:
                         ifc_file.remove(entity)
                         if entity.is_a("IfcPropertySet"):
                             deleted_psets += 1
                     except Exception:
                         pass
-
-                # ==========================================
-                # BLENDER-LOGIK ENDE
-                # ==========================================
 
                 progress_bar.progress(100)
                 status_text.text("✅ Verarbeitung erfolgreich abgeschlossen!")
@@ -147,9 +152,11 @@ if uploaded_file is not None:
 
             finally:
                 if 'temp_in_path' in locals() and os.path.exists(temp_in_path):
-                    os.remove(temp_in_path)
+                    try: os.remove(temp_in_path)
+                    except: pass
                 if 'temp_out_path' in locals() and os.path.exists(temp_out_path):
-                    os.remove(temp_out_path)
+                    try: os.remove(temp_out_path)
+                    except: pass
 
 # --- Download-Bereich ---
 if st.session_state.processed_file is not None and st.session_state.stats is not None:
