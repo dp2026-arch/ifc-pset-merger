@@ -33,7 +33,33 @@ st.write("Laden Sie eine IFC-Datei hoch und definieren Sie flexibel, welche Pset
 st.subheader("⚙️ Parameter einstellen")
 target_name = st.text_input("Name des neuen Ziel-Psets:", value="AWB_Specific")
 
-default_sources = """Pset_ReinforcementBarPitchOfSlab
+default_sources = """Pset_AirSideSystemInformation
+Pset_AirTerminalTypeCommon
+Pset_BeamCommon
+Pset_BuildingCommon
+Pset_BuildingElementProxyCommon
+Pset_ColumnCommon
+Pset_ConcreteElementGeneral
+Pset_CoveringCommon
+Pset_CurtainWallCommon
+Pset_DistributionFlowElementCommon
+Pset_DoorCommon
+Pset_DuctSegmentTypeCommon
+Pset_FlowSegmentDuctSegment
+Pset_FlowSegmentPipeSegment
+Pset_FurnitureTypeCommon
+Pset_ManufacturerOccurrence
+Pset_ManufacturerTypeInformation
+Pset_MemberCommon
+Pset_OpeningElementCommon
+Pset_PlateCommon
+Pset_ProductRequirements
+Pset_ProvisionForVoid
+Pset_QuantityTakeOff
+Pset_RailingCommon
+Pset_ReinforcementBarPitchOfBeam
+Pset_ReinforcementBarPitchOfColumn
+Pset_ReinforcementBarPitchOfSlab
 Pset_ReinforcementBarPitchOfWall
 Pset_RoofCommon
 Pset_SlabCommon
