@@ -15,6 +15,7 @@ def get_image_as_base64(path):
 st.set_page_config(page_title="IFC Pset Merger", page_icon="🏗️")
 
 try:
+    # Passe den Dateinamen an, falls dein Logo anders heißt
     logo_base64 = get_image_as_base64("image_1.png")
     st.markdown(
         f"""
@@ -25,7 +26,7 @@ try:
         """, unsafe_allow_html=True
     )
 except FileNotFoundError:
-    st.title("F+P Architekten🏗️ IFC Pset Zusammenführung")
+    st.title("F+P Architekten 🏗️ IFC Pset Zusammenführung")
 
 st.write("Laden Sie eine IFC-Datei hoch und definieren Sie flexibel, welche Psets zusammengeführt werden sollen.")
 
@@ -138,38 +139,34 @@ if uploaded_file is not None:
                         processed_objects += 1
 
                 # ==========================================
-                # SCHRITT 3: BEREINIGUNG (ABSTURZSICHER!)
+                # SCHRITT 3: BEREINIGUNG (SICHER ÜBER API!)
                 # ==========================================
-                status_text.text("🧹 Schritt 3/3: Trenne alte Verknüpfungen...")
-                
-                # 1. ZUERST alle Verknüpfungen (Relationen) sammeln und löschen
-                rels_to_delete = set()
-                for pset in relevant_psets:
-                    rels = getattr(pset, "Defines", []) or getattr(pset, "PropertyDefinitionOf", [])
-                    for rel in rels:
-                        if rel.is_a("IfcRelDefinesByProperties"):
-                            rels_to_delete.add(rel)
-                
-                for rel in rels_to_delete:
-                    try:
-                        ifc_file.remove(rel)
-                    except Exception:
-                        pass
-
-                # 2. DANACH die nun freistehenden Psets löschen
+                status_text.text("🧹 Schritt 3/3: Sichere API-Bereinigung...")
                 total_deletes = len(relevant_psets)
                 deleted_psets = 0
 
                 for j, pset in enumerate(relevant_psets):
+                    # Progress Bar Update
                     if total_deletes > 0 and j % max(1, (total_deletes // 20)) == 0:
                         progress_bar.progress(min(100, int((j / total_deletes) * 100)))
                         status_text.text(f"🧹 Schritt 3/3: Lösche alte Psets ({j+1} von {total_deletes})...")
                     
-                    try:
-                        ifc_file.remove(pset)
+                    rels = getattr(pset, "Defines", []) or getattr(pset, "PropertyDefinitionOf", [])
+                    pset_deleted = False
+                    
+                    for rel in rels:
+                        if rel.is_a("IfcRelDefinesByProperties"):
+                            # list() für eine statische Kopie der Objekte
+                            for obj in list(rel.RelatedObjects):
+                                try:
+                                    # Sicheres Löschen der Verknüpfung inkl. Pset durch die API
+                                    ifcopenshell.api.run("pset.remove_pset", ifc_file, product=obj, pset=pset)
+                                    pset_deleted = True
+                                except Exception:
+                                    pass # Warnungen ignorieren, um die UI sauber zu halten
+                    
+                    if pset_deleted:
                         deleted_psets += 1
-                    except Exception:
-                        pass
 
                 progress_bar.progress(100)
                 status_text.text("✅ Verarbeitung erfolgreich abgeschlossen!")
@@ -188,6 +185,7 @@ if uploaded_file is not None:
                 st.error(f"Es gab einen Fehler bei der Verarbeitung: {e}")
 
             finally:
+                # Temporäre Dateien sicher aufräumen
                 if 'temp_in_path' in locals() and os.path.exists(temp_in_path):
                     try: os.remove(temp_in_path)
                     except: pass
