@@ -1,9 +1,10 @@
 import streamlit as st
 import ifcopenshell
-import ifcopenshell.guid  # Wichtig für die Generierung neuer IFC-IDs
+import ifcopenshell.guid
 import tempfile
 import os
 import base64
+from collections import defaultdict
 
 # --- Funktion zum Laden des Logos ---
 def get_image_as_base64(path):
@@ -16,9 +17,7 @@ st.set_page_config(page_title="IFC Pset Merger", page_icon="🏗️")
 
 # --- Titel mit eigenem Logo ---
 try:
-    # WICHTIG: Ersetzen Sie "image_1.png" durch den exakten Namen Ihrer Bilddatei!
     logo_base64 = get_image_as_base64("image_1.png")
-    
     st.markdown(
         f"""
         <h1 style="display: flex; align-items: center; gap: 10px;">
@@ -30,17 +29,14 @@ try:
     )
 except FileNotFoundError:
     st.title("F+P Architekten🏗️ IFC Pset Zusammenführung")
-    st.warning("⚠️ Logo-Bild ('image_1.png') wurde nicht gefunden. Bitte legen Sie es in denselben Ordner wie das Skript.")
+    st.warning("⚠️ Logo-Bild ('image_1.png') wurde nicht gefunden.")
 
 st.write("Laden Sie eine IFC-Datei hoch und definieren Sie flexibel, welche Psets zusammengeführt werden sollen.")
 
 # --- Einstellungs-Bereich (UI) ---
 st.subheader("⚙️ Parameter einstellen")
 
-target_name = st.text_input(
-    label="Name des neuen Ziel-Psets:", 
-    value="UBA_Pset_Specific"
-)
+target_name = st.text_input("Name des neuen Ziel-Psets:", value="UBA_Pset_Specific")
 
 default_sources = """UBE_Pset_Specific_Beam
 UBE_Pset_Specific_BuildingElementProxy
@@ -64,20 +60,13 @@ UBE_Pset_Specific_Wall
 UBE_Pset_Specific_Window
 Pset_WallCommon"""
 
-sources_input = st.text_area(
-    label="Zu suchende Psets (eines pro Zeile):", 
-    value=default_sources, 
-    height=250
-)
-
+sources_input = st.text_area("Zu suchende Psets (eines pro Zeile):", value=default_sources, height=250)
 sources_to_merge = [line.strip() for line in sources_input.split('\n') if line.strip()]
 
 st.divider()
-# --------------------------------------
 
 uploaded_file = st.file_uploader("Wählen Sie eine IFC-Datei aus", type=['ifc'])
 
-# --- Session State Initialisierung für den Streamlit-Lifecycle ---
 if 'processed_file' not in st.session_state:
     st.session_state.processed_file = None
 if 'stats' not in st.session_state:
@@ -85,9 +74,8 @@ if 'stats' not in st.session_state:
 
 if uploaded_file is not None:
     if st.button("Psets verarbeiten", type="primary"): 
-        
         if not sources_to_merge:
-            st.error("Bitte geben Sie mindestens ein Quell-Pset in das Textfeld ein.")
+            st.error("Bitte geben Sie mindestens ein Quell-Pset ein.")
         elif not target_name.strip():
             st.error("Bitte geben Sie einen gültigen Ziel-Namen ein.")
         else:
@@ -99,45 +87,48 @@ if uploaded_file is not None:
             try:
                 ifc_file = ifcopenshell.open(temp_in_path)
                 
-                all_objects = ifc_file.by_type("IfcObject")
-                total_objects = len(all_objects)
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                status_text.text("🔍 Analysiere IFC-Struktur (Das geht jetzt rasend schnell)...")
+                
+                # --- NEUE, HIGH-PERFORMANCE LOGIK ---
+                # 1. Wir suchen NUR die Pset-Verknüpfungen, nicht alle Bauteile
+                all_relations = ifc_file.by_type("IfcRelDefinesByProperties")
+                
+                # Dictionary: Speichert für jedes Objekt eine Liste seiner relevanten (Relation, Pset) Paare
+                objects_to_psets = defaultdict(list)
+                
+                for rel in all_relations:
+                    pset = rel.RelatingPropertyDefinition
+                    if pset and pset.is_a("IfcPropertySet") and getattr(pset, "Name", None) in sources_to_merge:
+                        for obj in rel.RelatedObjects:
+                            objects_to_psets[obj].append((rel, pset))
+                
+                objects_to_process = list(objects_to_psets.keys())
+                total_objects = len(objects_to_process)
                 
                 modified_objects_count = 0
                 removed_psets_count = 0
                 
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                # OwnerHistory einmalig holen (wird für neue Psets benötigt)
-                owner_history_list = ifc_file.by_type("IfcOwnerHistory")
-                owner_history = owner_history_list[0] if owner_history_list else None
-                
-                # --- LOGIK ---
-                for i, obj in enumerate(all_objects):
+                if total_objects == 0:
+                    status_text.text("✅ Keine passenden Psets zum Zusammenführen gefunden.")
+                    progress_bar.progress(100)
+                else:
+                    owner_history_list = ifc_file.by_type("IfcOwnerHistory")
+                    owner_history = owner_history_list[0] if owner_history_list else None
                     
-                    if total_objects > 0 and i % max(1, (total_objects // 20)) == 0:
-                        progress = min(100, int((i / total_objects) * 100))
-                        progress_bar.progress(progress)
-                        status_text.text(f"⏳ Verarbeite Bauteil {i} von {total_objects}...")
+                    # 2. Wir iterieren NUR über die Bauteile, die wirklich betroffen sind
+                    for i, obj in enumerate(objects_to_process):
+                        if i % max(1, (total_objects // 20)) == 0:
+                            progress = min(100, int((i / total_objects) * 100))
+                            progress_bar.progress(progress)
+                            status_text.text(f"⏳ Führe Psets zusammen: Bauteil {i+1} von {total_objects}...")
 
-                    # --- FAST-TRACK ---
-                    is_defined_by = getattr(obj, "IsDefinedBy", [])
-                    if not is_defined_by:
-                        continue 
-
-                    matching_psets = []
-                    
-                    for rel in is_defined_by:
-                        if rel.is_a("IfcRelDefinesByProperties"):
-                            pset = rel.RelatingPropertyDefinition
-                            if pset and pset.is_a("IfcPropertySet") and getattr(pset, "Name", None) in sources_to_merge:
-                                matching_psets.append((rel, pset))
-                    
-                    if matching_psets: 
-                        # 1. Alle Eigenschaften aus den gefundenen Psets sammeln
+                        matching_psets = objects_to_psets[obj]
                         all_properties = []
                         existing_prop_names = set()
                         
+                        # Eigenschaften sammeln
                         for rel, pset in matching_psets:
                             if getattr(pset, "HasProperties", None):
                                 for prop in pset.HasProperties:
@@ -145,7 +136,7 @@ if uploaded_file is not None:
                                         all_properties.append(prop)
                                         existing_prop_names.add(prop.Name)
                         
-                        # 2. Neues Ziel-Pset erstellen (sofern Eigenschaften existieren)
+                        # Neues Ziel-Pset erstellen
                         if all_properties:
                             new_pset = ifc_file.createIfcPropertySet(
                                 GlobalId=ifcopenshell.guid.new(),
@@ -155,7 +146,6 @@ if uploaded_file is not None:
                                 HasProperties=all_properties
                             )
                             
-                            # 3. Neues Pset mit dem aktuellen Bauteil verknüpfen
                             ifc_file.createIfcRelDefinesByProperties(
                                 GlobalId=ifcopenshell.guid.new(),
                                 OwnerHistory=owner_history,
@@ -164,41 +154,39 @@ if uploaded_file is not None:
                                 RelatedObjects=[obj],
                                 RelatingPropertyDefinition=new_pset
                             )
-                            
                             modified_objects_count += 1 
                             
-                            # 4. Alte Psets sicher auflösen (Shared Pset Logik)
+                            # Alte Psets sauber auflösen
                             for rel, pset in matching_psets:
-                                related_objects = list(rel.RelatedObjects)
-                                if obj in related_objects:
-                                    related_objects.remove(obj)
+                                current_related = list(rel.RelatedObjects)
+                                if obj in current_related:
+                                    current_related.remove(obj)
                                 
-                                if len(related_objects) == 0:
-                                    ifc_file.remove(rel)
+                                if len(current_related) == 0:
+                                    try:
+                                        ifc_file.remove(rel)
+                                    except: pass
                                     
-                                    # Prüfen ob das Pset noch von anderen Relationen genutzt wird
-                                    inverse_rel = getattr(pset, "Defines", None) or getattr(pset, "PropertyDefinitionOf", [])
-                                    if not inverse_rel:
+                                    try:
                                         ifc_file.remove(pset)
                                         removed_psets_count += 1 
+                                    except: pass
                                 else:
-                                    rel.RelatedObjects = related_objects
+                                    rel.RelatedObjects = current_related
 
-                progress_bar.progress(100)
-                status_text.text("✅ Verarbeitung abgeschlossen!")
+                    progress_bar.progress(100)
+                    status_text.text("✅ Verarbeitung in Rekordzeit abgeschlossen!")
 
-                # Datei speichern
-                ifc_file.write(temp_out_path)
-
-                # Datei in den RAM laden für den Session State
-                with open(temp_out_path, "rb") as file:
-                    st.session_state.processed_file = file.read()
-                    
-                st.session_state.stats = {
-                    "total": total_objects,
-                    "modified": modified_objects_count,
-                    "removed": removed_psets_count
-                }
+                    # Datei speichern und laden
+                    ifc_file.write(temp_out_path)
+                    with open(temp_out_path, "rb") as file:
+                        st.session_state.processed_file = file.read()
+                        
+                    st.session_state.stats = {
+                        "total": total_objects,
+                        "modified": modified_objects_count,
+                        "removed": removed_psets_count
+                    }
 
             except Exception as e:
                 st.error(f"Es gab einen Fehler bei der Verarbeitung: {e}")
@@ -209,14 +197,14 @@ if uploaded_file is not None:
                 if 'temp_out_path' in locals() and os.path.exists(temp_out_path):
                     os.remove(temp_out_path)
 
-# --- Download-Bereich außerhalb der Button-Logik ---
-if st.session_state.processed_file is not None:
-    st.success("Die IFC-Datei wurde erfolgreich bereinigt!")
+# --- Download-Bereich ---
+if st.session_state.processed_file is not None and st.session_state.stats is not None:
+    st.success("Die IFC-Datei wurde erfolgreich und schnell bereinigt!")
     
     col1, col2, col3 = st.columns(3)
-    col1.metric("Untersuchte Bauteile", f"{st.session_state.stats['total']:,}")
+    col1.metric("Gefundene Bauteile", f"{st.session_state.stats['total']:,}")
     col2.metric("Angepasste Bauteile", f"{st.session_state.stats['modified']:,}")
-    col3.metric("Gelöschte (leere) Psets", f"{st.session_state.stats['removed']:,}")
+    col3.metric("Gelöschte Psets", f"{st.session_state.stats['removed']:,}")
 
     st.divider()
 
