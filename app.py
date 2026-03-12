@@ -103,17 +103,27 @@ if uploaded_file is not None:
 
                 # 3. BRUTE-FORCE BEREINIGUNG
                 status_text.text("🧹 Schritt 3/3: Lösche alte Psets rigoros...")
-                deleted_psets = 0
+                deleted_psets = set()
                 for pset in relevant_psets:
                     rels = getattr(pset, "Defines", []) or getattr(pset, "PropertyDefinitionOf", [])
-                    for rel in rels:
-                        try:
-                            ifc_file.remove(rel)
-                        except Exception: pass
+                    entities_to_delete.update(rels)  # Alle Relationen auf einmal hinzufügen
+                    entities_to_delete.add(pset)  # Das Pset selbst hinzufügen
+                total_deletes = len(entities_to_delete)
+                deleted_psets = 0
+
+                # Jetzt löschen wir alles in einer sauberen, iterativen Schleife
+                for j, entity in enumerate(entities_to_delete):
+                    # UI-Update nur alle 5% (spart extrem viel Render-Zeit in Streamlit)
+                    if j % max(1, (total_deletes // 20)) == 0:
+                        progress_bar.progress(min(100, int((j / total_deletes) * 100)))
+                        status_text.text(f"🧹 Schritt 3/3: Lösche alte Daten ({j + 1} von {total_deletes})...")
+
                     try:
-                        ifc_file.remove(pset)
-                        deleted_psets += 1
-                    except Exception: pass
+                        ifc_file.remove(entity)
+                        if entity.is_a("IfcPropertySet"):
+                            deleted_psets += 1
+                    except Exception:
+                        pass
 
                 # ==========================================
                 # BLENDER-LOGIK ENDE
