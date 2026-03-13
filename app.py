@@ -27,7 +27,7 @@ try:
 except FileNotFoundError:
     st.title("F+P Architekten 🏗️ IFC Pset Zusammenführung")
 
-st.write("Laden Sie eine IFC-Datei hoch und definieren Sie flexibel, welche Psets in ein einzelnes Ziel-Pset zusammengeführt werden sollen.")
+st.write("Laden Sie eine IFC-Datei hoch und definieren Sie flexibel, welche Psets in ein einzelnes Ziel-Pset zusammengeführt werden sollen. Leere Eigenschaften werden automatisch ignoriert.")
 
 # --- Einstellungs-Bereich (UI) ---
 st.subheader("⚙️ Parameter einstellen")
@@ -75,7 +75,7 @@ if uploaded_file is not None:
                 # ==========================================
                 # SCHRITT 1: DATEN SAMMELN (NEUE METHODE)
                 # ==========================================
-                status_text.text("🔍 Schritt 1/3: Suche relevante Psets (Rückwärtssuche)...")
+                status_text.text("🔍 Schritt 1/3: Suche relevante Psets und filtere leere Eigenschaften...")
                 
                 relevant_psets = [p for p in ifc_file.by_type("IfcPropertySet") if getattr(p, "Name", None) and p.Name.lower() in sources_to_merge]
                 
@@ -83,29 +83,61 @@ if uploaded_file is not None:
                 collision_count = 0
 
                 for pset in relevant_psets:
-                    # KUGELSICHERE SUCHE: Findet alle Verknüpfungen (auch in IFC4 und an Typen)
-                    inverses = ifc_file.get_inverse(pset)
+                    attached_objects = set()
                     
-                    for inv in inverses:
-                        related_objects = []
+                    # 1. Instanzen
+                    rels = getattr(pset, "Defines", []) or getattr(pset, "PropertyDefinitionOf", [])
+                    for rel in rels:
+                        if rel.is_a("IfcRelDefinesByProperties"):
+                            for obj in rel.RelatedObjects:
+                                attached_objects.add(obj)
+                                
+                    # 2. Typen
+                    defines_types = getattr(pset, "DefinesType", [])
+                    for type_obj in defines_types:
+                        attached_objects.add(type_obj)
                         
-                        # Fall 1: Reguläre Bauteile (Occurrences)
-                        if inv.is_a("IfcRelDefinesByProperties"):
-                            related_objects = getattr(inv, "RelatedObjects", [])
+                    for obj in attached_objects:
+                        if obj not in objects_to_update:
+                            objects_to_update[obj] = {"props": {}}
                         
-                        # Fall 2: Typen in IFC4 (die hängen direkt am Pset)
-                        elif inv.is_a("IfcTypeObject"):
-                            related_objects = [inv]
-                            
-                        for obj in related_objects:
-                            if obj not in objects_to_update:
-                                objects_to_update[obj] = {"props": {}}
-                            
-                            if getattr(pset, "HasProperties", None):
-                                for prop in pset.HasProperties:
-                                    if prop.Name in objects_to_update[obj]["props"]:
-                                        collision_count += 1
-                                    objects_to_update[obj]["props"][prop.Name] = prop
+                        if getattr(pset, "HasProperties", None):
+                            for prop in pset.HasProperties:
+                                if not prop.is_a("IfcPropertySingleValue"):
+                                    continue
+                                    
+                                # --- FILTER FÜR LEERE EIGENSCHAFTEN ---
+                                val = getattr(prop, "NominalValue", None)
+                                if val is None or val.wrappedValue is None or str(val.wrappedValue).strip() == "":
+                                    continue # Eigenschaft ist leer -> überspringen!
+
+                                prop_name = prop.Name
+                                
+                                # --- KOLLISIONSSCHUTZ ---
+                                if prop_name in objects_to_update[obj]["props"]:
+                                    existing_prop = objects_to_update[obj]["props"][prop_name]
+                                    val1 = existing_prop.NominalValue.wrappedValue if hasattr(existing_prop, "NominalValue") and existing_prop.NominalValue else None
+                                    val2 = prop.NominalValue.wrappedValue if hasattr(prop, "NominalValue") and prop.NominalValue else None
+                                    
+                                    if val1 == val2 and val1 is not None:
+                                        continue # Wert ist identisch -> ignorieren
+                                    
+                                    # Wert ist unterschiedlich -> umbenennen, um Datenverlust zu vermeiden
+                                    collision_count += 1
+                                    counter = 1
+                                    new_name = f"{prop_name}_{counter}"
+                                    
+                                    while new_name in objects_to_update[obj]["props"]:
+                                        counter += 1
+                                        new_name = f"{prop_name}_{counter}"
+                                    
+                                    new_prop = ifc_file.createIfcPropertySingleValue(
+                                        Name=new_name, Description=prop.Description,
+                                        NominalValue=prop.NominalValue, Unit=prop.Unit
+                                    )
+                                    objects_to_update[obj]["props"][new_name] = new_prop
+                                else:
+                                    objects_to_update[obj]["props"][prop_name] = prop
                 
                 total_objects = len(objects_to_update)
                 
@@ -124,9 +156,9 @@ if uploaded_file is not None:
                         processed_objects += 1
 
                 # ==========================================
-                # SCHRITT 3: BEREINIGUNG & GARBAGE COLLECTION
+                # SCHRITT 3: ABSTURZSICHERE BEREINIGUNG
                 # ==========================================
-                status_text.text("🧹 Schritt 3/3: Sichere API-Bereinigung & Garbage Collection...")
+                status_text.text("🧹 Schritt 3/3: Sichere API-Bereinigung (Crash-Proof)...")
                 total_deletes = len(relevant_psets)
                 deleted_psets = 0
 
@@ -135,25 +167,36 @@ if uploaded_file is not None:
                         progress_bar.progress(min(100, int((j / total_deletes) * 100)))
                         status_text.text(f"🧹 Schritt 3/3: Lösche alte Psets ({j+1} von {total_deletes})...")
                     
-                    inverses = ifc_file.get_inverse(pset)
+                    pset_id = pset.id() # ID für sichere Abfrage merken
                     
-                    # 1. API-Bereinigung
-                    for inv in inverses:
-                        if inv.is_a("IfcRelDefinesByProperties"):
-                            for obj in list(getattr(inv, "RelatedObjects", [])):
-                                try:
-                                    ifcopenshell.api.run("pset.remove_pset", ifc_file, product=obj, pset=pset)
-                                except: pass
-                        elif inv.is_a("IfcTypeObject"):
-                            try:
-                                ifcopenshell.api.run("pset.remove_pset", ifc_file, product=inv, pset=pset)
-                            except: pass
-                    
-                    # 2. Harte Garbage Collection
+                    attached_products = []
                     try:
-                        ifc_file.remove(pset)
-                        deleted_psets += 1
-                    except:
+                        rels = getattr(pset, "Defines", []) or getattr(pset, "PropertyDefinitionOf", [])
+                        for rel in rels:
+                            if rel.is_a("IfcRelDefinesByProperties"):
+                                attached_products.extend(list(rel.RelatedObjects))
+                        attached_products.extend(list(getattr(pset, "DefinesType", [])))
+                    except Exception:
+                        pass
+
+                    for obj in attached_products:
+                        try:
+                            # Existenzprüfung vor dem Löschen (verhindert C++ Absturz)
+                            try:
+                                current_pset = ifc_file.by_id(pset_id)
+                            except Exception:
+                                break 
+                            
+                            ifcopenshell.api.run("pset.remove_pset", ifc_file, product=obj, pset=current_pset)
+                        except Exception:
+                            pass
+
+                    # Manuelles Aufräumen für evtl. noch existierende verwaiste Psets
+                    try:
+                        if ifc_file.by_id(pset_id):
+                            ifc_file.remove(ifc_file.by_id(pset_id))
+                            deleted_psets += 1
+                    except Exception:
                         deleted_psets += 1
 
                 progress_bar.progress(100)
@@ -190,7 +233,7 @@ if st.session_state.processed_file is not None and st.session_state.stats is not
     col2.metric("Gelöschte alte Psets", f"{st.session_state.stats['deleted']:,}")
     
     coll = st.session_state.stats['collisions']
-    col3.metric("Überschriebene Werte", f"{coll:,}", delta="- Kollisionen" if coll > 0 else "Keine", delta_color="inverse")
+    col3.metric("Gerettete Kollisionen", f"{coll:,}", delta="Daten gesichert" if coll > 0 else "Keine", delta_color="normal")
 
     st.divider()
 
