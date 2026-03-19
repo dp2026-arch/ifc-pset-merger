@@ -86,7 +86,7 @@ if uploaded_file is not None:
                     attached_objects = set()
                     
                     # 1. Instanzen
-                    rels = getattr(pset, "Defines", []) or getattr(pset, "PropertyDefinitionOf", [])
+                    rels = getattr(pset, "DefinesOccurrence", []) or getattr(pset, "PropertyDefinitionOf", [])
                     for rel in rels:
                         if rel.is_a("IfcRelDefinesByProperties"):
                             for obj in rel.RelatedObjects:
@@ -171,7 +171,7 @@ if uploaded_file is not None:
                     
                     attached_products = []
                     try:
-                        rels = getattr(pset, "Defines", []) or getattr(pset, "PropertyDefinitionOf", [])
+                        rels = getattr(pset, "DefinesOccurrence", []) or getattr(pset, "PropertyDefinitionOf", [])
                         for rel in rels:
                             if rel.is_a("IfcRelDefinesByProperties"):
                                 attached_products.extend(list(rel.RelatedObjects))
